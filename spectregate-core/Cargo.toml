@@ -1,0 +1,10 @@
+[package]
+name = "spectregate-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+bincode.workspace = true
+chacha20.workspace = true
+rand.workspace = true

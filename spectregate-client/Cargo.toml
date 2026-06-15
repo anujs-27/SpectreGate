@@ -1,0 +1,7 @@
+[package]
+name = "spectregate-client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+spectregate-core = { path = "../spectregate-core" }
