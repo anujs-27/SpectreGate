@@ -3,8 +3,8 @@ use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
 use chacha20poly1305::{
-    aead::{Aead, AeadCore, KeyInit},
-    ChaCha20Poly1305, ChaChaPoly1305, Key, Nonce,
+    aead::{Aead, KeyInit},
+    ChaCha20Poly1305, Nonce,
 };
 
 #[derive(Serialize, Deserialize)]
