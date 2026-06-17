@@ -5,3 +5,6 @@ edition.workspace = true
 
 [dependencies]
 spectregate-core = { path = "../spectregate-core" }
+tokio.workspace = true
+clap.workspace = true
+pcap.workspace = true

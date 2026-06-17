@@ -4,7 +4,7 @@ use std::{net::IpAddr, path::Path};
 use tokio;
 
 #[derive(Parser, Debug)]
-#[command(version, about)]
+#[command(version, about = "CLI tool of spectregate")]
 struct Args {
     #[arg(short, long)]
     server: IpAddr,
