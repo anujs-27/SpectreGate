@@ -8,3 +8,5 @@ spectregate-core = { path = "../spectregate-core" }
 tokio.workspace = true
 clap.workspace = true
 pcap.workspace = true
+futures.workspace = true
+etherparse.workspace = true

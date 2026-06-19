@@ -1,14 +1,18 @@
 use std::{
     collections::HashSet,
+    error::Error,
     net::IpAddr,
     path::Path,
     sync::{Arc, Mutex},
 };
 
+use futures::StreamExt;
+
 use clap::Parser;
-use pcap;
+use etherparse;
+use pcap::{self, PacketCodec};
 use spectregate_core::decrypt_payload;
-use tokio;
+use tokio::{self, process::Command};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Daemon service for spectregate.")]
@@ -25,6 +29,16 @@ struct Args {
 
 struct NonceCache {
     seen_nonces: Arc<Mutex<HashSet<[u8; 12]>>>,
+}
+
+pub struct SimpleCodec;
+
+impl PacketCodec for SimpleCodec {
+    type Item = Vec<u8>;
+
+    fn decode(&mut self, packet: pcap::Packet<'_>) -> Self::Item {
+        packet.data.to_vec()
+    }
 }
 
 #[tokio::main]
@@ -62,10 +76,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         filter_string
     );
 
+    let mut packet_stream = cap.stream(SimpleCodec)?;
+
+    let cache = NonceCache {
+        seen_nonces: Arc::new(Mutex::new(HashSet::new())),
+    };
+
+    while let Some(packet_result) = packet_stream.next().await {
+        match packet_result {
+            Ok(raw_packet_bytes) => {
+                match etherparse::SlicedPacket::from_ethernet(&raw_packet_bytes) {
+                    Ok(packet) => {
+                        let src_ip = match packet.net {
+                            Some(etherparse::InternetSlice::Ipv4(ipv4_header)) => {
+                                IpAddr::V4(ipv4_header.header().source_addr())
+                            }
+                            _ => {
+                                continue;
+                            }
+                        };
+
+                        if let Some(etherparse::TransportSlice::Udp(udp_slice)) = packet.transport {
+                            let payload_slice = udp_slice.payload();
+                            if payload_slice.len() < 84 {
+                                continue;
+                            }
+
+                            if let Err(e) =
+                                validate_and_trigger(payload_slice, src_ip, &key_bytes, &cache)
+                                    .await
+                            {
+                                eprintln!("Discarded invalid knock sequence: {}", e);
+                            }
+                        }
+                    }
+                    Err(_) => continue,
+                }
+            }
+            Err(e) => eprintln!("Error capturing packet: {}", e),
+        }
+    }
+
     Ok(())
 }
 
-fn validate_and_trigger(
+async fn validate_and_trigger(
     raw_payload: &[u8],
     src_ip: IpAddr,
     key: &[u8; 32],
@@ -101,9 +156,34 @@ fn validate_and_trigger(
         .into());
     }
 
-    //TODO: trigger firewall
+    trigger_firewall_gate(src_ip, decrypted_payload.port).await?;
 
     Ok(())
 }
 
-//TODO: trigger_firewall_gate function
+async fn trigger_firewall_gate(client_ip: IpAddr, target_port: u16) -> Result<(), Box<dyn Error>> {
+    let element_binding = format!("{{ {} . {} timeout 10s }}", client_ip, target_port);
+
+    let status = Command::new("nft")
+        .args([
+            "add",
+            "element",
+            "inet",
+            "filter",
+            "approved_knocks",
+            &element_binding,
+        ])
+        .status()
+        .await?;
+
+    if status.success() {
+        println!(
+            "Gate opened successfully. Target port {} is available for 10 seconds.",
+            target_port
+        );
+    } else {
+        eprintln!("Firewall Error: nftables rejected the element insertion.");
+    }
+
+    Ok(())
+}
