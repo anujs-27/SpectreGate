@@ -1,4 +1,4 @@
-use bincode;
+use bincode::{self, Options};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
@@ -16,21 +16,24 @@ pub struct Payload {
 
 pub const TARGET_PAYLOAD_SIZE: usize = 64;
 
-fn pad_payload(payload: &mut Payload) -> Result<Vec<u8>, String> {
-    payload.padding = Vec::new();
-    let current_size = bincode::serialized_size(&payload)
-        .map_err(|e| format!("Size calculation failed: {}", e))? as usize;
+fn pad_payload(payload: &Payload) -> Result<Vec<u8>, String> {
+    let base_payload = Payload {
+        timestamp: payload.timestamp,
+        port: payload.port,
+        padding: Vec::new(),
+    };
 
-    if current_size < TARGET_PAYLOAD_SIZE {
-        let header_overhead = 8;
-        if TARGET_PAYLOAD_SIZE > (current_size + header_overhead) {
-            let padding_needed = TARGET_PAYLOAD_SIZE - current_size - header_overhead;
-            let mut random_bytes = vec![0u8; padding_needed];
-            rand::rng().fill(&mut random_bytes[..]);
-            payload.padding = random_bytes;
-        }
+    let mut serialized_bytes = bincode::serialize(&base_payload)
+        .map_err(|error| format!("Serialization error: {}", error))?;
+
+    if serialized_bytes.len() < TARGET_PAYLOAD_SIZE {
+        let padding = TARGET_PAYLOAD_SIZE - serialized_bytes.len();
+        let mut random_bytes = vec![0u8; padding];
+        rand::rng().fill(&mut random_bytes[..]);
+        serialized_bytes.extend_from_slice(&random_bytes);
     }
-    bincode::serialize(&payload).map_err(|e| format!("Serialization failed: {}", e))
+
+    Ok(serialized_bytes)
 }
 
 pub fn encrypt_payload(payload: &mut Payload, key_bytes: &[u8; 32]) -> Result<Vec<u8>, String> {
@@ -53,6 +56,7 @@ pub fn encrypt_payload(payload: &mut Payload, key_bytes: &[u8; 32]) -> Result<Ve
 }
 
 pub fn decrypt_payload(packet_bytes: &[u8], key_bytes: &[u8; 32]) -> Result<Payload, String> {
+    // 12 bytes for nonce + 16 bytes minimum ChaCha20Poly1305 authentication tag
     if packet_bytes.len() < 28 {
         return Err(String::from(
             "Packet length falls short of minimum cryptographic criteria",
@@ -68,8 +72,10 @@ pub fn decrypt_payload(packet_bytes: &[u8], key_bytes: &[u8; 32]) -> Result<Payl
         .decrypt(nonce, ciphertext_slice)
         .map_err(|err| format!("Cryptographic validation failed: {:?}", err))?;
 
-    let payload: Payload = bincode::deserialize(&decrypted_bytes)
-        .map_err(|err| format!("Payload deserialization failure: {:?}", err))?;
+    let payload: Payload = bincode::options()
+        .allow_trailing_bytes()
+        .deserialize(&decrypted_bytes)
+        .map_err(|err| format!("Error while deserialisation: {}", err))?;
 
     Ok(payload)
 }
