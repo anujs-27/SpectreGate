@@ -13,7 +13,7 @@ SERVER_IP="10.0.0.1/24"
 echo "=== Cleaning up any existing environment ==="
 ip netns del $CLIENT_NS 2>/dev/null || true
 ip link del $VETH_SERVER 2>/dev/null || true
-sudo nft delete table inet spectregate 2>/dev/null || true
+sudo nft delete table inet filter 2>/dev/null || true
 
 echo "=== Creating Client Network Namespace ==="
 ip netns add $CLIENT_NS
@@ -34,20 +34,23 @@ ip netns exec $CLIENT_NS ip link set $VETH_CLIENT up
 ip netns exec $CLIENT_NS ip link set lo up
 
 echo "=== Initializing Host nftables Base Ruleset ==="
-# 1. Create the persistent table container
-nft add table inet spectregate
+# 1. Create the persistent table container expected by the daemon
+nft add table inet filter
 
 # 2. Add standard input filter hook targeting incoming interface traffic (Default: DROP)
-nft add chain inet spectregate input \{ type filter hook input priority 0 \; policy drop \; \}
+nft add chain inet filter input \{ type filter hook input priority 0 \; policy drop \; \}
 
-# 3. Create the atomic concatenation tracking set with flags to allow timed rule decay
-nft add set inet spectregate allowed_knocks \{ type ipv4_addr . inet_service \; flags timeout \; \}
+# 3. CRITICAL FIX: Allow packets belonging to already established or related connections
+nft add rule inet filter input ct state established,related accept
 
-# 4. Bind the set constraint rule to allow immediate TCP access matching elements
-nft add rule inet spectregate input ip saddr . tcp dport @allowed_knocks accept
+# 4. Create the atomic concatenation tracking set with flags to allow timed rule decay
+nft add set inet filter approved_knocks \{ type ipv4_addr . inet_service \; flags timeout \; \}
 
-# 5. Allow essential local loopback interface communications
-nft add rule inet spectregate input iifname "lo" accept
+# 5. Bind the set constraint rule to allow immediate TCP access matching elements
+nft add rule inet filter input ip saddr . tcp dport @approved_knocks accept
+
+# 6. Allow essential local loopback interface communications
+nft add rule inet filter input iifname "lo" accept
 
 echo "=== Environment Setup Completed Successfully ==="
 echo "Host Interface: $VETH_SERVER ($SERVER_IP)"
